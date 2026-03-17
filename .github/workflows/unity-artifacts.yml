@@ -7,6 +7,10 @@ on:
         description: Optional version label for the output zip
         required: false
         type: string
+      tag:
+        description: Optional release tag to upload the zip to
+        required: false
+        type: string
   release:
     types:
       - published
@@ -197,37 +201,51 @@ jobs:
         with:
           path: build/unity/artifacts
 
-      - name: Resolve version label
-        id: version
+      - name: Resolve package metadata
+        id: metadata
         shell: bash
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           if [ -n "${INPUT_VERSION}" ]; then
             VERSION="${INPUT_VERSION}"
           elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${INPUT_TAG}" ]; then
+            VERSION="${INPUT_TAG}"
           else
             VERSION="${GITHUB_SHA}"
           fi
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG=""
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Package Unity zip
         shell: bash
         run: |
-          bash build/unity/package-unity-artifacts.sh build/unity/artifacts build/unity/package "${{ steps.version.outputs.value }}"
-          test -f "build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip"
+          bash build/unity/package-unity-artifacts.sh build/unity/artifacts build/unity/package "${{ steps.metadata.outputs.version }}"
+          test -f "build/unity/package/zstd-unity-${{ steps.metadata.outputs.version }}.zip"
 
       - name: Upload packaged zip artifact
         uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
         with:
-          name: zstd-unity-${{ steps.version.outputs.value }}
-          path: build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip
+          name: zstd-unity-${{ steps.metadata.outputs.version }}
+          path: build/unity/package/zstd-unity-${{ steps.metadata.outputs.version }}.zip
 
       - name: Publish zip to release
-        if: github.event_name == 'release'
-        uses: skx/github-action-publish-binaries@b9ca5643b2f1d7371a6cba7f35333f1461bbc703 # tag=release-2.0
+        if: steps.metadata.outputs.tag != ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip
+          TAG: ${{ steps.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          gh release upload "$TAG" "build/unity/package/zstd-unity-${{ steps.metadata.outputs.version }}.zip" --clobber
