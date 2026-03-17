@@ -39,6 +39,8 @@ bin/
 .buckd/
 buck-out/
 build-*
+!build/unity/build-apple.sh
+!build/unity/build-linux-cross.sh
 *.gcda
 
 # IDE
