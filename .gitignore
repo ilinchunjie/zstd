@@ -61,3 +61,6 @@ compile_commands.json
 .clangd
 perf.data
 perf.data.old
+**/__pycache__
+build/unity/test-artifacts
+build/unity/test-package

@@ -1,0 +1,233 @@
+name: unity-artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional version label for the output zip
+        required: false
+        type: string
+  release:
+    types:
+      - published
+
+permissions: read-all
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+          - abi: armeabi-v7a
+          - abi: x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Build Android shared library
+        shell: bash
+        run: |
+          cmake -S build/cmake -B "build/unity/android-${{ matrix.abi }}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_ANDROID_NDK="$ANDROID_NDK_HOME" \
+            -DANDROID_ABI="${{ matrix.abi }}" \
+            -DANDROID_PLATFORM=21 \
+            -DZSTD_BUILD_SHARED=ON \
+            -DZSTD_BUILD_STATIC=OFF \
+            -DZSTD_BUILD_PROGRAMS=OFF \
+            -DZSTD_BUILD_TESTS=OFF
+          cmake --build "build/unity/android-${{ matrix.abi }}" --config Release
+
+      - name: Collect Android artifact
+        shell: bash
+        run: |
+          mkdir -p "build/unity/out/android-${{ matrix.abi }}"
+          cp "$(find "build/unity/android-${{ matrix.abi }}" -name 'libzstd.so' | head -n 1)" "build/unity/out/android-${{ matrix.abi }}/libzstd.so"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: android-${{ matrix.abi }}
+          path: build/unity/out/android-${{ matrix.abi }}/libzstd.so
+
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+          - arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Install Linux toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake gcc g++ gcc-aarch64-linux-gnu g++-aarch64-linux-gnu file
+
+      - name: Build Linux shared library
+        shell: bash
+        run: |
+          bash build/unity/build-linux-cross.sh "${{ matrix.arch }}" "build/unity/work" "build/unity/out/linux-${{ matrix.arch }}"
+          file "build/unity/out/linux-${{ matrix.arch }}/libzstd.so"
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: linux-${{ matrix.arch }}
+          path: build/unity/out/linux-${{ matrix.arch }}/libzstd.so
+
+  build-apple:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Build macOS universal shared library
+        shell: bash
+        run: |
+          bash build/unity/build-apple.sh macos "build/unity/work" "build/unity/out/macos"
+          file "build/unity/out/macos/libzstd.dylib"
+          lipo -info "build/unity/out/macos/libzstd.dylib"
+
+      - name: Build iOS static library
+        shell: bash
+        run: |
+          bash build/unity/build-apple.sh ios "build/unity/work" "build/unity/out/ios"
+          lipo -info "build/unity/out/ios/libzstd.a"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: macos
+          path: build/unity/out/macos/libzstd.dylib
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: ios
+          path: build/unity/out/ios/libzstd.a
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          cmake -S build/cmake -B build/unity/windows-amd64 -A x64 -DZSTD_BUILD_SHARED=ON -DZSTD_BUILD_STATIC=OFF -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF
+
+      - name: Build Windows shared library
+        shell: pwsh
+        run: |
+          cmake --build build/unity/windows-amd64 --config Release
+          New-Item -ItemType Directory -Force -Path build/unity/out/windows-amd64 | Out-Null
+          $dll = Get-ChildItem -Path build/unity/windows-amd64 -Recurse -Filter zstd.dll | Select-Object -First 1
+          if (-not $dll) { throw 'zstd.dll not found' }
+          Copy-Item $dll.FullName build/unity/out/windows-amd64/zstd.dll
+          $lib = Get-ChildItem -Path build/unity/windows-amd64 -Recurse -Filter zstd.lib | Select-Object -First 1
+          if ($lib) { Copy-Item $lib.FullName build/unity/out/windows-amd64/zstd.lib }
+          $pdb = Get-ChildItem -Path build/unity/windows-amd64 -Recurse -Filter zstd.pdb | Select-Object -First 1
+          if ($pdb) { Copy-Item $pdb.FullName build/unity/out/windows-amd64/zstd.pdb }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: windows-amd64
+          path: build/unity/out/windows-amd64/*
+
+  generate-csharp-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Generate bridge
+        run: |
+          python build/unity/generate-csharp-bridge.py --output build/unity/generated/ZstdNative.cs
+          test -f build/unity/generated/ZstdNative.cs
+          grep -q 'ZSTD_compress' build/unity/generated/ZstdNative.cs
+          grep -q 'ZDICT_trainFromBuffer' build/unity/generated/ZstdNative.cs
+          grep -q 'public enum ZSTD_ErrorCode' build/unity/generated/ZstdNative.cs
+
+      - name: Upload C# artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: csharp
+          path: build/unity/generated/ZstdNative.cs
+
+  package-unity-zip:
+    needs:
+      - build-android
+      - build-linux
+      - build-apple
+      - build-windows
+      - generate-csharp-bridge
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # tag=v4.1.1
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: build/unity/artifacts
+
+      - name: Resolve version label
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="${GITHUB_SHA}"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Package Unity zip
+        shell: bash
+        run: |
+          bash build/unity/package-unity-artifacts.sh build/unity/artifacts build/unity/package "${{ steps.version.outputs.value }}"
+          test -f "build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip"
+
+      - name: Upload packaged zip artifact
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # tag=v4.3.1
+        with:
+          name: zstd-unity-${{ steps.version.outputs.value }}
+          path: build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip
+
+      - name: Publish zip to release
+        if: github.event_name == 'release'
+        uses: skx/github-action-publish-binaries@b9ca5643b2f1d7371a6cba7f35333f1461bbc703 # tag=release-2.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: build/unity/package/zstd-unity-${{ steps.version.outputs.value }}.zip
