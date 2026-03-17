@@ -49,7 +49,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=Android \
             -DCMAKE_ANDROID_NDK="$ANDROID_NDK_HOME" \
             -DANDROID_ABI="${{ matrix.abi }}" \
-            -DANDROID_PLATFORM=21 \
+            -DANDROID_PLATFORM=26 \
             -DZSTD_BUILD_SHARED=ON \
             -DZSTD_BUILD_STATIC=OFF \
             -DZSTD_BUILD_PROGRAMS=OFF \
