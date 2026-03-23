@@ -55,8 +55,7 @@ jobs:
         run: |
           cmake -S build/cmake -B "build/unity/android-${{ matrix.abi }}" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_ANDROID_NDK="$ANDROID_NDK_HOME" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384" \
             -DANDROID_ABI="${{ matrix.abi }}" \
             -DANDROID_PLATFORM=25 \
@@ -66,14 +65,38 @@ jobs:
             -DZSTD_BUILD_TESTS=OFF
           cmake --build "build/unity/android-${{ matrix.abi }}" --config Release
 
-      - name: Verify Android ELF alignment
+      - name: Verify Android ELF architecture and alignment
         shell: bash
         run: |
           SO_PATH="$(find "build/unity/android-${{ matrix.abi }}" -name 'libzstd.so' | head -n 1)"
           test -n "$SO_PATH"
 
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
           OBJDUMP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objdump"
+          test -x "$READELF"
           test -x "$OBJDUMP"
+
+          ELF_HEADER="$("$READELF" -h "$SO_PATH")"
+          echo "$ELF_HEADER"
+
+          case "${{ matrix.abi }}" in
+            arm64-v8a)
+              echo "$ELF_HEADER" | grep -Eq 'Class:[[:space:]]+ELF64'
+              echo "$ELF_HEADER" | grep -Eq 'Machine:[[:space:]]+AArch64'
+              ;;
+            armeabi-v7a)
+              echo "$ELF_HEADER" | grep -Eq 'Class:[[:space:]]+ELF32'
+              echo "$ELF_HEADER" | grep -Eq 'Machine:[[:space:]]+ARM'
+              ;;
+            x86_64)
+              echo "$ELF_HEADER" | grep -Eq 'Class:[[:space:]]+ELF64'
+              echo "$ELF_HEADER" | grep -Eq 'Machine:[[:space:]]+(Advanced Micro Devices X86-64|x86-64)'
+              ;;
+            *)
+              echo "Unsupported Android ABI: ${{ matrix.abi }}"
+              exit 1
+              ;;
+          esac
 
           "$OBJDUMP" -p "$SO_PATH" | grep 'LOAD'
 
